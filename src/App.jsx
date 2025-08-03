@@ -14,13 +14,16 @@ function App() {
     serum_sodium: 136,
     sex: true, // true for male, false for female  
     smoking: false,
-    time: 4,
-    death_event: false
+    time: 4
   });
 
   const [prediction, setPrediction] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Backend API URL - change this to your Flask server URL
+  const API_BASE_URL = 'http://127.0.0.1:5000';
 
   const handleInputChange = (field, value) => {
     setFormData(prev => ({
@@ -29,149 +32,132 @@ function App() {
     }));
   };
 
-  const simulateSVCPrediction = (data) => {
-    // Simulate Random Forest algorithm prediction using ensemble decision trees
-    // Each "tree" contributes to the final prediction with weighted votes
-    let tree_votes = [];
-    let feature_importance = {};
-    
-    // Tree 1: Age and demographic factors
-    let tree1_vote = 0;
-    if (data.age > 65) tree1_vote += 0.3;
-    if (data.age > 75) tree1_vote += 0.2;
-    if (data.sex) tree1_vote += 0.1; // Male higher risk
-    tree_votes.push(tree1_vote);
-    feature_importance.age = (data.age > 65 ? 0.25 : 0.15);
-    
-    // Tree 2: Comorbidities and lifestyle
-    let tree2_vote = 0;
-    if (data.anaemia) tree2_vote += 0.25;
-    if (data.diabetes) tree2_vote += 0.2;
-    if (data.high_blood_pressure) tree2_vote += 0.15;
-    if (data.smoking) tree2_vote += 0.2;
-    tree_votes.push(tree2_vote);
-    feature_importance.anaemia = (data.anaemia ? 0.2 : 0.05);
-    feature_importance.diabetes = (data.diabetes ? 0.15 : 0.05);
-    
-    // Tree 3: Cardiac function
-    let tree3_vote = 0;
-    if (data.ejection_fraction < 30) tree3_vote += 0.4;
-    else if (data.ejection_fraction < 40) tree3_vote += 0.25;
-    else if (data.ejection_fraction < 50) tree3_vote += 0.1;
-    tree_votes.push(tree3_vote);
-    feature_importance.ejection_fraction = (data.ejection_fraction < 40 ? 0.3 : 0.1);
-    
-    // Tree 4: Renal function
-    let tree4_vote = 0;
-    if (data.serum_creatinine > 2.0) tree4_vote += 0.3;
-    else if (data.serum_creatinine > 1.4) tree4_vote += 0.2;
-    if (data.serum_sodium < 135) tree4_vote += 0.15;
-    tree_votes.push(tree4_vote);
-    feature_importance.serum_creatinine = (data.serum_creatinine > 1.4 ? 0.25 : 0.1);
-    
-    // Tree 5: Laboratory markers
-    let tree5_vote = 0;
-    if (data.creatinine_phosphokinase > 1000) tree5_vote += 0.2;
-    else if (data.creatinine_phosphokinase > 500) tree5_vote += 0.1;
-    if (data.platelets < 150000) tree5_vote += 0.15;
-    else if (data.platelets < 200000) tree5_vote += 0.05;
-    tree_votes.push(tree5_vote);
-    feature_importance.creatinine_phosphokinase = (data.creatinine_phosphokinase > 500 ? 0.15 : 0.05);
-    
-    // Tree 6: Follow-up time and death event
-    let tree6_vote = 0;
-    if (data.time < 30) tree6_vote += 0.25;
-    else if (data.time < 60) tree6_vote += 0.15;
-    if (data.death_event) tree6_vote += 0.4; // Strong predictor
-    tree_votes.push(tree6_vote);
-    feature_importance.time = (data.time < 30 ? 0.2 : 0.1);
-    feature_importance.death_event = (data.death_event ? 0.35 : 0.05);
-    
-    // Random Forest ensemble: Average the tree votes with weights
-    const tree_weights = [0.15, 0.18, 0.25, 0.20, 0.12, 0.10]; // Different weights for different trees
-    let weighted_risk_score = 0;
-    
-    for (let i = 0; i < tree_votes.length; i++) {
-      weighted_risk_score += tree_votes[i] * tree_weights[i];
+  const callBackendAPI = async (data) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/predict`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('API call failed:', error);
+      throw error;
     }
+  };
+
+  const processBackendResult = (backendResult, inputData) => {
+    const deathProbability = backendResult.confidence / 100;
+    const isHighRisk = backendResult.death_event === 1;
     
-    // Add some randomness to simulate forest variance
-    const forest_variance = (Math.random() - 0.5) * 0.1;
-    weighted_risk_score = Math.max(0, Math.min(1, weighted_risk_score + forest_variance));
-    
+    // Convert backend result to our frontend format
     let risk_category;
     let recommendations;
+    let risk_score = backendResult.confidence;
+
+    // Determine risk category based on death event prediction and confidence
+    if (isHighRisk) {
+      if (deathProbability > 0.7) {
+        risk_category = 'Critical';
+        recommendations = [
+          'Emergency medical evaluation needed',
+          'Consider ICU admission', 
+          'Aggressive treatment protocol',
+          'Daily monitoring essential',
+          'Advanced heart failure team consultation'
+        ];
+      } else {
+        risk_category = 'High';
+        recommendations = [
+          'Immediate medical attention required',
+          'Consider hospitalization',
+          'Optimize heart failure medications', 
+          'Weekly monitoring recommended',
+          'Cardiology consultation needed'
+        ];
+      }
+    } else {
+      if (deathProbability < 0.3) {
+        risk_category = 'Low';
+        recommendations = [
+          'Continue regular monitoring',
+          'Maintain healthy lifestyle',
+          'Follow up in 6 months',
+          'Focus on preventive care'
+        ];
+      } else {
+        risk_category = 'Moderate';
+        recommendations = [
+          'Increase monitoring frequency',
+          'Consider lifestyle modifications',
+          'Follow up in 3 months',
+          'Monitor blood pressure regularly',
+          'Optimize medication adherence'
+        ];
+      }
+    }
+
+    // Generate feature importance based on clinical knowledge
     let top_features = [];
     
-    // Identify top contributing features
-    const sorted_features = Object.entries(feature_importance)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 3);
-    
-    top_features = sorted_features.map(([feature, importance]) => ({
-      feature: feature.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-      importance: Math.round(importance * 100)
-    }));
-    
-    if (weighted_risk_score < 0.25) {
-      risk_category = 'Low';
-      recommendations = [
-        'Continue regular monitoring',
-        'Maintain healthy lifestyle',
-        'Follow up in 6 months',
-        'Focus on preventive care'
-      ];
-    } else if (weighted_risk_score < 0.45) {
-      risk_category = 'Moderate';
-      recommendations = [
-        'Increase monitoring frequency',
-        'Consider lifestyle modifications',
-        'Follow up in 3 months',
-        'Monitor blood pressure regularly',
-        'Optimize medication adherence'
-      ];
-    } else if (weighted_risk_score < 0.70) {
-      risk_category = 'High';
-      recommendations = [
-        'Immediate medical attention required',
-        'Consider hospitalization',
-        'Optimize heart failure medications',
-        'Weekly monitoring recommended',
-        'Cardiology consultation needed'
-      ];
-    } else {
-      risk_category = 'Critical';
-      recommendations = [
-        'Emergency medical evaluation needed',
-        'Consider ICU admission',
-        'Aggressive treatment protocol',
-        'Daily monitoring essential',
-        'Advanced heart failure team consultation'
-      ];
+    if (inputData.ejection_fraction < 40) {
+      top_features.push({ feature: 'Ejection Fraction', importance: 85 });
     }
-    
+    if (inputData.serum_creatinine > 1.4) {
+      top_features.push({ feature: 'Serum Creatinine', importance: 72 });
+    }
+    if (inputData.age > 65) {
+      top_features.push({ feature: 'Age', importance: 68 });
+    }
+    if (inputData.anaemia) {
+      top_features.push({ feature: 'Anaemia', importance: 65 });
+    }
+    if (inputData.time < 30) {
+      top_features.push({ feature: 'Follow-up Time', importance: 60 });
+    }
+
+    // Sort and take top 3
+    top_features = top_features.sort((a, b) => b.importance - a.importance).slice(0, 3);
+
     return {
-      risk_score: Math.round(weighted_risk_score * 100),
+      risk_score: Math.round(risk_score),
       risk_category,
-      confidence: Math.round((0.82 + Math.random() * 0.15) * 100), // Random Forest typically has good confidence
+      confidence: Math.round(backendResult.confidence),
       recommendations,
       top_features,
-      tree_count: tree_votes.length
+      death_event: backendResult.death_event
     };
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setIsLoading(true);
     setShowResults(false);
+    setError(null);
     
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    const result = simulateSVCPrediction(formData);
-    setPrediction(result);
-    setIsLoading(false);
-    setShowResults(true);
+    try {
+      // Call the backend API
+      const backendResult = await callBackendAPI(formData);
+      
+      // Process the result to match our frontend format
+      const processedResult = processBackendResult(backendResult, formData);
+      
+      setPrediction(processedResult);
+      setShowResults(true);
+    } catch (err) {
+      setError(`Failed to get prediction: ${err.message}`);
+      console.error('Prediction failed:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const getRiskColor = (category) => {
@@ -195,7 +181,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Heart Failure Risk Predictor</h1>
-              <p className="text-gray-600 mt-1">Advanced Random Forest Machine Learning Analysis</p>
+              <p className="text-gray-600 mt-1">Machine Learning-Powered Clinical Decision Support</p>
             </div>
           </div>
         </div>
@@ -211,7 +197,7 @@ function App() {
                 <h2 className="text-2xl font-semibold text-gray-900">Patient Data Input</h2>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-8">
+              <div className="space-y-8">
                 {/* Demographic Information */}
                 <div className="border-l-4 border-blue-500 pl-4">
                   <div className="flex items-center space-x-2 mb-4">
@@ -292,8 +278,7 @@ function App() {
                       { key: 'anaemia', label: 'Anaemia' },
                       { key: 'diabetes', label: 'Diabetes' },
                       { key: 'high_blood_pressure', label: 'High Blood Pressure' },
-                      { key: 'smoking', label: 'Smoking' },
-                      { key: 'death_event', label: 'Death Event' }
+                      { key: 'smoking', label: 'Smoking' }
                     ].map(({ key, label }) => (
                       <div key={key} className="flex items-center space-x-3">
                         <input
@@ -377,7 +362,8 @@ function App() {
                 </div>
 
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleSubmit}
                   disabled={isLoading}
                   className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-4 focus:ring-blue-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center space-x-2"
                 >
@@ -393,7 +379,7 @@ function App() {
                     </>
                   )}
                 </button>
-              </form>
+              </div>
             </div>
           </div>
 
@@ -402,17 +388,32 @@ function App() {
             <div className="bg-white rounded-xl shadow-lg p-6 sticky top-8">
               <h2 className="text-2xl font-semibold text-gray-900 mb-6">Prediction Results</h2>
               
-              {!showResults && !isLoading && (
+              {!showResults && !isLoading && !error && (
                 <div className="text-center py-12">
                   <Heart className="h-16 w-16 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500">Enter patient data and click predict to see results</p>
                 </div>
               )}
 
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex">
+                    <AlertTriangle className="h-5 w-5 text-red-400" />
+                    <div className="ml-3">
+                      <h3 className="text-sm font-medium text-red-800">Prediction Error</h3>
+                      <p className="mt-2 text-sm text-red-700">{error}</p>
+                      <p className="mt-2 text-xs text-red-600">
+                        Make sure the Flask backend is running on {API_BASE_URL}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {isLoading && (
                 <div className="text-center py-12">
                   <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                  <p className="text-gray-600">Processing with Random Forest algorithm...</p>
+                  <p className="text-gray-600">Connecting to ML model...</p>
                 </div>
               )}
 
@@ -429,10 +430,10 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Confidence */}
+                  {/* Model Prediction */}
                   <div className="bg-gray-50 rounded-lg p-4">
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm font-medium text-gray-700">Forest Confidence ({prediction.tree_count} trees)</span>
+                      <span className="text-sm font-medium text-gray-700">Model Confidence</span>
                       <span className="text-sm font-bold text-gray-900">{prediction.confidence}%</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
@@ -441,10 +442,13 @@ function App() {
                         style={{ width: `${prediction.confidence}%` }}
                       ></div>
                     </div>
+                    <p className="text-xs text-gray-600 mt-2">
+                      Death Event Prediction: {prediction.death_event === 1 ? 'Yes' : 'No'}
+                    </p>
                   </div>
 
                   {/* Top Contributing Features */}
-                  {prediction.top_features && (
+                  {prediction.top_features && prediction.top_features.length > 0 && (
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 mb-3">Key Risk Factors</h3>
                       <div className="space-y-2">
@@ -474,7 +478,7 @@ function App() {
                   {/* Disclaimer */}
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                     <p className="text-xs text-yellow-800">
-                      <strong>Disclaimer:</strong> This Random Forest prediction is for educational purposes only and should not replace professional medical advice. Always consult with a healthcare professional for medical decisions.
+                      <strong>Disclaimer:</strong> This ML prediction is for educational purposes only and should not replace professional medical advice. Always consult with a healthcare professional for medical decisions.
                     </p>
                   </div>
                 </div>
